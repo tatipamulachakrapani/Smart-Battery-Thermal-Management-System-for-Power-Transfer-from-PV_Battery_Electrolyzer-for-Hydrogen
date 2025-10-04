@@ -22,7 +22,7 @@ float t = 0, tn1 = 0, t_record = 0;
 U8X8_SSD1306_128X64_NONAME_HW_I2C display(U8X8_PIN_NONE);
 
 OneWire oneWire(ONE_WIRE_BUS), oneWireAmb(ONE_WIRE_BUS_AMB);
-DallasTemperature tempSensor(&oneWire), tempSensorAmb(&oneWireAmb);
+DallasTemperature tempSensorB(&oneWire), tempSensorE(&oneWireAmb);
 
 unsigned long lastDisplayUpdate = 0, lastBlinkTime = 0;
 const unsigned long displayInterval = 1000;
@@ -42,8 +42,8 @@ void setup() {
   display.setFont(u8x8_font_chroma48medium8_r);
   display.setPowerSave(0);
 
-  tempSensor.begin();
-  tempSensorAmb.begin();
+  tempSensorB.begin();
+  tempSensorE.begin();
 
   // Initial layout (static labels)
   display.setCursor(0, 0); display.print("BatI  :");
@@ -51,7 +51,7 @@ void setup() {
   display.setCursor(0, 2); display.print("Bat%  :");
   display.setCursor(0, 3); display.print("Sol.V :");
   display.setCursor(0, 4); display.print("BatT  :");
-  display.setCursor(0, 5); display.print("AmbT  :");
+  display.setCursor(0, 5); display.print("E T   :");
   display.setCursor(0, 6); display.print("Stat  :");
 }
 
@@ -67,17 +67,25 @@ void loop() {
   float vBatt = (vRawA3 * (5.0 / 1023.0)) * 6.0 * 1.032;
 
   // Request and read temperatures
-  tempSensor.requestTemperatures();
-  tempSensorAmb.requestTemperatures();
-  float tempC = tempSensor.getTempCByIndex(0);
-  float tempAC = tempSensorAmb.getTempCByIndex(0);
+  tempSensorB.requestTemperatures();
+  tempSensorE.requestTemperatures();
+  float tempB = tempSensorB.getTempCByIndex(0);
+  float tempE = tempSensorE.getTempCByIndex(0);
 
-  // 🌡️ Over-temperature protection with hysteresis
-  if (tempC > 40.5) {
+  // 🌡️ Battery Over-temperature protection with hysteresis
+  if (tempB > 40.5) {
     charging = false;
-  } else if (tempC < 38.0) {
+  } else if (tempB < 38.0) {
     charging = true;
   }
+  // 🌡️ Electrolyzer Over-temperature protection (with hysteresis)
+  static bool electrolyzerLockout = false;  // new state flag
+  if (tempE > 69.5) {
+    electrolyzerLockout = true;   // stop power when Electrolyzer exceeds 70 °C
+    }
+    else if (tempE < 68.0) {
+      electrolyzerLockout = false;  // allow power again after cooling
+      }
 
   // 🔋 Over-voltage protection with hysteresis
   if (vBatt > 12.94) {
@@ -100,8 +108,8 @@ void loop() {
   Serial.print("iBatt: "); Serial.print(iBatt);
   Serial.print(" mA, vSrc: "); Serial.print(vSrc);
   Serial.print(" V, vBatt: "); Serial.print(vBatt);
-  Serial.print(" V, tempC: "); Serial.print(tempC);
-  Serial.print(" C, tempAC: "); Serial.print(tempAC);
+  Serial.print(" V, tempB: "); Serial.print(tempB);
+  Serial.print(" C, tempE: "); Serial.print(tempE);
   Serial.print(" C, Duty: "); Serial.println(duty * 100);
 
   if (millis() - lastDisplayUpdate >= displayInterval) {
@@ -110,10 +118,13 @@ void loop() {
     int battPercent = constrain((vBatt - 11.54) / (12.54 - 11.54) * 100, 0, 100);
     bool solar = (vSrc > 6.0);
 
-    if (tempC > 40.5 && millis() - lastBlinkTime > 500) {
+    if (tempB > 40.5 && millis() - lastBlinkTime > 500) {
       overheatBlink = !overheatBlink;
       lastBlinkTime = millis();
     }
+    else if (tempE > 69.5 && millis() - lastBlinkTime > 500) 
+    { overheatBlink = !overheatBlink;
+      lastBlinkTime = millis(); }
 
     display.setCursor(8, 0); display.print("       "); display.setCursor(8, 0); display.print((int)iBatt); display.print("mA");
     display.setCursor(8, 1); display.print("       "); display.setCursor(8, 1); display.print(vBatt, 1); display.print("V");
@@ -123,14 +134,21 @@ void loop() {
     display.print(solar ? " \x18" : " X");
 
     display.setCursor(8, 4);
-    if (tempC > 40.5 && overheatBlink) display.print("     ");
+    if (tempB > 40.5 && overheatBlink) display.print("     ");
     else {
       display.print("       "); display.setCursor(8, 4);
-      display.print(tempC, 1); display.print((char)248); display.print("C");
+      display.print(tempB, 1); display.print((char)248); display.print("C");
     }
 
-    display.setCursor(8, 5); display.print("       "); display.setCursor(8, 5);
-    display.print(tempAC, 1); display.print((char)248); display.print("C");
+    display.setCursor(8, 5);
+    if (tempB > 69.5 && overheatBlink) display.print("     ");
+    else {
+      display.print("       "); display.setCursor(8, 5);
+      display.print(tempE, 1); display.print((char)248); display.print("C");
+    }
+
+//    display.setCursor(8, 5); display.print("       "); display.setCursor(8, 5);
+ //   display.print(tempE, 1); display.print((char)248); display.print("C");
 
     // ⚠️ Display charging status
     display.setCursor(8, 6); display.print("       "); display.setCursor(8, 6);
